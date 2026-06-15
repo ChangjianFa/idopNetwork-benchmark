@@ -14,8 +14,6 @@ run_genie3 <- function(abund_matrix, cfg) {
   tryCatch({
     t0 <- proc.time()
 
-    # GENIE3 接受：行=基因/物种，列=样本（与 idopNetwork 相同方向）
-    # 转为 matrix（GENIE3 要求数值矩阵）
     expr_mat <- as.matrix(abund_matrix)
     storage.mode(expr_mat) <- "double"
 
@@ -23,13 +21,14 @@ run_genie3 <- function(abund_matrix, cfg) {
       stop("物种数或样本数不足，无法运行 GENIE3")
     }
 
-    # 运行随机森林网络推断
+    # 强制单核：GENIE3 内部用 doParallel 管理 cluster 但某些版本不释放
+    # socket 连接，多次调用会耗尽 R 的 128 连接上限。
+    # 10 物种的数据单核 < 1s，无需并行。
     weight_mat <- GENIE3(expr_mat,
                          nTrees   = cfg$GENIE3_NTREES,
-                         nCores   = cfg$IDOP_THREADS,
+                         nCores   = 1L,
                          verbose  = FALSE)
 
-    # weight_mat[target, regulator] → 转置为 score_mat[regulator, target]
     score_mat <- t(weight_mat)
 
     elapsed <- (proc.time() - t0)["elapsed"]

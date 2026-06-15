@@ -4,7 +4,7 @@
 
 N_SPECIES      <- 10L       # 物种数（行）
 N_POSITIONS    <- 30L       # 梯度位置数（列）
-N_REPLICATES   <- 2L        # Monte Carlo 重复次数（pilot run）
+N_REPLICATES   <- 30L       # Monte Carlo 重复次数
 NOISE_SD       <- 0.10      # log 尺度加性噪声标准差
 SPARSITY_FRAC  <- 0.25      # 真实网络稀疏度（非对角非零比例）
 EDGE_STRENGTH  <- c(-0.5, 0.5)  # 边权重均匀采样范围
