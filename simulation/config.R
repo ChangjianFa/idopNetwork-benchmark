@@ -2,7 +2,7 @@
 # 全局参数配置
 # ============================================================
 
-N_SPECIES      <- 20L       # 物种数（行）
+N_SPECIES      <- 10L       # 物种数（行）
 N_POSITIONS    <- 30L       # 梯度位置数（列）
 N_REPLICATES   <- 2L        # Monte Carlo 重复次数（pilot run）
 NOISE_SD       <- 0.10      # log 尺度加性噪声标准差
