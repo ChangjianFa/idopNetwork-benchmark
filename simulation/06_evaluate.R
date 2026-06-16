@@ -7,6 +7,9 @@
 # 评估指标：
 #   - AUROC：边存在检测（所有方法）
 #   - AUPRC：边存在检测，适合不平衡数据（阳性率约25%）
+#   - TPR：真阳性率（Recall），top-k 阈值，k = 真实边数
+#   - FPR：假阳性率，top-k 阈值
+#   - MCC：Matthews 相关系数，top-k 阈值
 #   - dir_acc：有向方法的方向准确率（idopNetwork、GENIE3）
 #   - sign_acc：边符号准确率（仅 idopNetwork）
 # ============================================================
@@ -33,35 +36,45 @@ make_pair_labels <- function(B_true) {
 evaluate_method <- function(result, B_true) {
   method <- result$method
 
-  if (is.null(result$score_mat)) {
-    return(data.frame(method = method,
-                      AUROC    = NA_real_,
-                      AUPRC    = NA_real_,
-                      dir_acc  = NA_real_,
-                      sign_acc = NA_real_,
-                      runtime  = result$runtime,
-                      status   = result$status,
-                      stringsAsFactors = FALSE))
+  na_row <- function(st) {
+    data.frame(method = method,
+               AUROC = NA_real_, AUPRC = NA_real_,
+               TPR = NA_real_, FPR = NA_real_, MCC = NA_real_,
+               dir_acc = NA_real_, sign_acc = NA_real_,
+               runtime = result$runtime, status = st,
+               stringsAsFactors = FALSE)
   }
+
+  if (is.null(result$score_mat)) return(na_row(result$status))
 
   sp_true <- rownames(B_true)
   sm      <- result$score_mat
   sp_pred <- intersect(sp_true, rownames(sm))
 
-  if (length(sp_pred) < 3) {
-    return(data.frame(method = method,
-                      AUROC    = NA_real_, AUPRC = NA_real_,
-                      dir_acc  = NA_real_, sign_acc = NA_real_,
-                      runtime  = result$runtime,
-                      status   = "物种重叠不足",
-                      stringsAsFactors = FALSE))
-  }
+  if (length(sp_pred) < 3) return(na_row("物种重叠不足"))
 
   pairs <- make_pair_labels(B_true[sp_pred, sp_pred, drop = FALSE])
   pairs$score <- mapply(function(fr, to) sm[fr, to], pairs$from, pairs$to)
 
   # 移除得分为 NA 的行
   pairs <- pairs[!is.na(pairs$score), ]
+
+  # ── TPR / FPR / MCC（top-k 阈值，k = 真实边数）──────────────────
+  k        <- sum(pairs$true_edge == 1)
+  n_pairs  <- nrow(pairs)
+  ord      <- order(pairs$score, decreasing = TRUE)
+  pred_pos <- rep(0L, n_pairs)
+  pred_pos[ord[seq_len(min(k, n_pairs))]] <- 1L
+
+  TP  <- sum(pred_pos == 1L & pairs$true_edge == 1L)
+  FP  <- sum(pred_pos == 1L & pairs$true_edge == 0L)
+  TN  <- sum(pred_pos == 0L & pairs$true_edge == 0L)
+  FN  <- sum(pred_pos == 0L & pairs$true_edge == 1L)
+
+  tpr <- if ((TP + FN) > 0) TP / (TP + FN) else NA_real_
+  fpr <- if ((FP + TN) > 0) FP / (FP + TN) else NA_real_
+  denom_mcc <- sqrt(as.numeric(TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+  mcc <- if (denom_mcc > 0) (TP * TN - FP * FN) / denom_mcc else NA_real_
 
   # AUROC
   roc_obj <- tryCatch(
@@ -109,6 +122,9 @@ evaluate_method <- function(result, B_true) {
   data.frame(method   = method,
              AUROC    = auroc,
              AUPRC    = auprc,
+             TPR      = tpr,
+             FPR      = fpr,
+             MCC      = mcc,
              dir_acc  = dir_acc,
              sign_acc = sign_acc,
              runtime  = result$runtime,

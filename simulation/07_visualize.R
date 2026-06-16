@@ -130,7 +130,7 @@ plot_direction_sign <- function(results_df, fig_dir) {
 
 # 汇总统计表
 summarize_results <- function(results_df) {
-  metrics <- c("AUROC", "AUPRC", "dir_acc", "sign_acc", "runtime")
+  metrics <- c("AUROC", "AUPRC", "TPR", "FPR", "MCC", "dir_acc", "sign_acc", "runtime")
   out <- lapply(metrics, function(m) {
     vals <- results_df[[m]]
     combos <- unique(results_df[, c("method", "scenario")])
