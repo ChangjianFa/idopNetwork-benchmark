@@ -9,7 +9,6 @@
 # ---- 0. 加载配置和依赖 ----
 source("simulation/config.R")
 source("simulation/01_simulate_lv.R")
-source("simulation/02_simulate_linear.R")
 source("simulation/03_run_idopnetwork.R")
 source("simulation/04_run_wgcna.R")
 source("simulation/05_run_genie3.R")
@@ -48,8 +47,6 @@ message("\n========== 生成模拟数据 ==========")
 sim_lv_data <- generate_all_lv(cfg)
 B_true <- sim_lv_data$B_true
 
-sim_var1_data <- generate_all_var1(cfg, B_true)
-
 message(sprintf(
   "真实网络：%d 物种，%d 条真实边（稀疏度 %.1f%%）",
   nrow(B_true),
@@ -73,52 +70,42 @@ if (file.exists(checkpoint_file)) {
 for (rep_id in seq(start_rep, N_REPLICATES)) {
   message(sprintf("\n========== 重复 %d / %d ==========", rep_id, N_REPLICATES))
 
-  results_this_rep <- list()
+  abund <- sim_lv_data$replicates[[rep_id]]$abund
 
-  for (scenario_name in c("LV", "VAR1")) {
-    abund <- if (scenario_name == "LV") {
-      sim_lv_data$replicates[[rep_id]]$abund
-    } else {
-      sim_var1_data$replicates[[rep_id]]$abund
-    }
-
-    if (is.null(abund)) {
-      message(sprintf("  [%s] 模拟失败，跳过", scenario_name))
-      next
-    }
-
-    message(sprintf("  [%s] 运行 idopNetwork ...", scenario_name))
-    r_idop <- run_idopnetwork(abund, cfg)
-    message(sprintf("    状态: %s  用时: %.1f 秒", r_idop$status,
-                    ifelse(is.na(r_idop$runtime), 0, r_idop$runtime)))
-
-    message(sprintf("  [%s] 运行 WGCNA ...", scenario_name))
-    r_wgcna <- run_wgcna(abund, cfg)
-    message(sprintf("    状态: %s  用时: %.1f 秒", r_wgcna$status,
-                    ifelse(is.na(r_wgcna$runtime), 0, r_wgcna$runtime)))
-
-    message(sprintf("  [%s] 运行 GENIE3 ...", scenario_name))
-    r_genie <- run_genie3(abund, cfg)
-    message(sprintf("    状态: %s  用时: %.1f 秒", r_genie$status,
-                    ifelse(is.na(r_genie$runtime), 0, r_genie$runtime)))
-
-    eval_df <- rbind(
-      evaluate_method(r_idop,  B_true),
-      evaluate_method(r_wgcna, B_true),
-      evaluate_method(r_genie, B_true)
-    )
-    eval_df$rep_id   <- rep_id
-    eval_df$scenario <- scenario_name
-
-    results_this_rep[[scenario_name]] <- eval_df
-    message(sprintf("  [%s] AUROC: idop=%.3f  WGCNA=%.3f  GENIE3=%.3f",
-                    scenario_name,
-                    eval_df$AUROC[eval_df$method == "idopNetwork"],
-                    eval_df$AUROC[eval_df$method == "WGCNA"],
-                    eval_df$AUROC[eval_df$method == "GENIE3"]))
+  if (is.null(abund)) {
+    message("  [LV] 模拟失败，跳过")
+    next
   }
 
-  all_eval[[rep_id]] <- do.call(rbind, results_this_rep)
+  message("  [LV] 运行 idopNetwork ...")
+  r_idop <- run_idopnetwork(abund, cfg)
+  message(sprintf("    状态: %s  用时: %.1f 秒", r_idop$status,
+                  ifelse(is.na(r_idop$runtime), 0, r_idop$runtime)))
+
+  message("  [LV] 运行 WGCNA ...")
+  r_wgcna <- run_wgcna(abund, cfg)
+  message(sprintf("    状态: %s  用时: %.1f 秒", r_wgcna$status,
+                  ifelse(is.na(r_wgcna$runtime), 0, r_wgcna$runtime)))
+
+  message("  [LV] 运行 GENIE3 ...")
+  r_genie <- run_genie3(abund, cfg)
+  message(sprintf("    状态: %s  用时: %.1f 秒", r_genie$status,
+                  ifelse(is.na(r_genie$runtime), 0, r_genie$runtime)))
+
+  eval_df <- rbind(
+    evaluate_method(r_idop,  B_true),
+    evaluate_method(r_wgcna, B_true),
+    evaluate_method(r_genie, B_true)
+  )
+  eval_df$rep_id   <- rep_id
+  eval_df$scenario <- "LV"
+
+  message(sprintf("  AUROC: idop=%.3f  WGCNA=%.3f  GENIE3=%.3f",
+                  eval_df$AUROC[eval_df$method == "idopNetwork"],
+                  eval_df$AUROC[eval_df$method == "WGCNA"],
+                  eval_df$AUROC[eval_df$method == "GENIE3"]))
+
+  all_eval[[rep_id]] <- eval_df
   saveRDS(all_eval, checkpoint_file)  # 每次重复后保存断点
 }
 
@@ -135,6 +122,6 @@ source("simulation/07_visualize.R")
 make_all_figures(cfg)
 
 message("\n========== 实验完成 ==========")
-print(aggregate(cbind(AUROC, AUPRC, dir_acc, sign_acc) ~ method + scenario,
+print(aggregate(cbind(AUROC, AUPRC, TPR, MCC, dir_acc) ~ method,
                 data = results_df,
                 FUN  = function(x) round(mean(x, na.rm = TRUE), 3)))
