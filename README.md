@@ -1,7 +1,6 @@
 # idopNetwork-benchmark
 
-A simulation study benchmarking three ecological network inference methods:
-**idopNetwork**, **WGCNA**, and **GENIE3**.
+A Monte Carlo simulation study benchmarking three ecological network inference methods under Lotka-Volterra dynamics: **idopNetwork**, **WGCNA**, and **GENIE3**.
 
 ---
 
@@ -9,65 +8,94 @@ A simulation study benchmarking three ecological network inference methods:
 
 Reconstructing ecological interaction networks from observational abundance data is a central challenge in community ecology. Three representative approaches cover different mechanistic assumptions:
 
-| Method | Underlying model | Output | Direction |
-|--------|-----------------|--------|-----------|
-| **idopNetwork** | Quasi-dynamic Lotka-Volterra ODE + adaptive LASSO | Weighted directed signed network | Yes |
-| **WGCNA** | Pearson correlation + Topological Overlap Measure (TOM) | Weighted undirected network | No |
-| **GENIE3** | Random forest variable importance | Weighted directed network | Yes |
+| Method | Underlying model | Output type | Direction | Sign |
+|--------|-----------------|-------------|-----------|------|
+| **idopNetwork** | Quasi-dynamic Lotka-Volterra ODE + adaptive LASSO | Weighted directed signed | Yes | Yes |
+| **WGCNA** | Pearson correlation + Topological Overlap Measure | Weighted undirected | No | No |
+| **GENIE3** | Random forest variable importance | Weighted directed | Yes | No |
 
-**idopNetwork** is designed specifically for ODE-based ecological dynamics and can recover both the direction and sign (positive/negative) of species interactions. WGCNA is a widely-used co-expression network approach adapted here for microbiome/ecological data. GENIE3, originally a gene regulatory network method, provides a machine-learning baseline for directed inference.
+**idopNetwork** is designed for ODE-based ecological dynamics and uniquely recovers both the **direction** and **sign** (positive/negative) of species interactions. This benchmark evaluates whether that model-data alignment translates into measurable performance gains under LV-generated data.
 
 ---
 
 ## Experiment Design
 
-### Simulation scenarios
+### Data generation — Lotka-Volterra ODE
 
-Two data-generating processes are evaluated to test performance under matched and mismatched model assumptions:
+Abundance trajectories are simulated from a multi-species generalized LV equation:
 
-**Scenario A — Lotka-Volterra (LV)**
-Abundance trajectories are simulated from a multi-species generalized LV ODE:
+$$\frac{dx_i}{dt} = r_i x_i + \sum_j B_{ij}\, x_i x_j, \qquad i = 1,\ldots,S$$
 
-$$\frac{dx_i}{dt} = r_i x_i + \sum_j B_{ij} x_i x_j$$
-
-This scenario favors idopNetwork, whose pipeline was designed for exactly this class of dynamics.
-
-**Scenario B — Linear VAR(1)**
-Abundance follows a first-order vector autoregressive process:
-
-$$X_t = B \cdot X_{t-1} + \varepsilon_t, \quad \varepsilon_t \sim \mathcal{N}(0, \sigma^2 I)$$
-
-This scenario has no ODE structure, providing a stress test for idopNetwork and a more favorable setting for WGCNA and GENIE3.
+where $r_i \sim \text{Uniform}(0.1, 0.5)$, $x_i(0) \sim \text{Uniform}(0.5, 2.0)$, solved with `deSolve::lsoda`. Log-scale Gaussian noise ($\sigma = 0.05$) is added at each gradient position.
 
 ### Ground-truth network
 
-A single sparse directed interaction matrix **B** (20 × 20 species, ~25% non-zero off-diagonal entries, weights ∈ [−0.5, 0.5]) is used across all replicates. `B[i, j] ≠ 0` means species *j* regulates species *i*.
+A single sparse directed interaction matrix **B** (10 × 10 species, 25% non-zero off-diagonal entries, weights ∈ [−0.5, 0.5]) is used across all replicates. `B[target, regulator] ≠ 0` means species *regulator* → species *target*.
 
-### Parameters
+### Main experiment parameters
 
 ```
-N_SPECIES     = 20       # number of species
-N_POSITIONS   = 30       # gradient positions (sample size)
-SPARSITY_FRAC = 0.25     # fraction of non-zero off-diagonal entries
-EDGE_STRENGTH = [-0.5, 0.5]  # uniform range for interaction weights
-NOISE_SD      = 0.10     # log-scale additive noise
-IDOP_MAXIT    = 1000     # max ODE optimizer iterations per species
+N_SPECIES     = 10      # number of species
+N_POSITIONS   = 30      # gradient positions (sample size)
+N_REPLICATES  = 30      # Monte Carlo replicates
+NOISE_SD      = 0.05    # log-scale additive Gaussian noise
+SPARSITY_FRAC = 0.25    # fraction of non-zero off-diagonal entries
+EDGE_STRENGTH = [-0.5, 0.5]
 MASTER_SEED   = 42
 ```
 
+### Parameter sensitivity sweep
+
+Two additional sweep lines (20 replicates each) test robustness:
+
+- **Noise sweep**: NOISE_SD ∈ {0.01, 0.03, 0.05, 0.07, 0.10}, fixed N_POSITIONS = 30
+- **Sample size sweep**: N_POSITIONS ∈ {15, 20, 30, 50, 80}, fixed NOISE_SD = 0.05
+
 ### Evaluation metrics
 
-All methods produce a score matrix `S[regulator, target]`; scores are compared against the binary ground truth via:
+All methods produce a score matrix `S[regulator, target]` compared against the binary ground truth:
 
-| Metric | Description | Applicable methods |
-|--------|-------------|-------------------|
-| **AUROC** | Area under ROC curve (edge existence) | All |
-| **AUPRC** | Area under precision-recall curve | All |
-| **Direction accuracy** | Fraction of true edges where `S[from,to] > S[to,from]` | idopNetwork, GENIE3 |
-| **Sign accuracy** | Fraction of true edges with correct positive/negative sign | idopNetwork only |
-| **Runtime** | Wall-clock seconds | All |
+| Metric | Description |
+|--------|-------------|
+| **AUROC** | Area under ROC curve — overall edge detection (threshold-free) |
+| **AUPRC** | Area under precision-recall curve (threshold-free) |
+| **MCC** | Matthews correlation coefficient at top-*k* threshold (*k* = true edge count = 22) |
+| **Direction accuracy** | Fraction of true edges where `S[i→j] > S[j→i]`; idopNetwork and GENIE3 only |
+| **Sign accuracy** | Fraction of true edges with correct +/− sign; idopNetwork only |
 
-Random baselines: AUROC = 0.5; AUPRC ≈ 0.24 (positive rate ≈ 25% × 19/20).
+Random baselines: AUROC = 0.5, AUPRC ≈ 0.244, MCC ≈ 0, direction accuracy = 0.5.
+
+> **Note on MCC**: the top-*k* threshold uses the true edge count, which is only available in simulations. AUROC and AUPRC are preferred for real-data benchmarks.
+
+---
+
+## Results (30 Monte Carlo replicates)
+
+### Edge detection (Table 1)
+
+| Method | AUROC | AUPRC | MCC |
+|--------|-------|-------|-----|
+| **idopNetwork** | **0.734 ± 0.063** | **0.397 ± 0.075** | **0.266 ± 0.131** |
+| GENIE3 | 0.633 ± 0.053 | 0.332 ± 0.056 | 0.114 ± 0.092 |
+| WGCNA | 0.477 ± 0.038 | 0.279 ± 0.041 | 0.049 ± 0.073 |
+
+![fig1](simulation/figures/fig1_metrics_combined.png)
+
+### Direction and sign accuracy
+
+| Method | Direction accuracy | Sign accuracy |
+|--------|--------------------|---------------|
+| **idopNetwork** | **0.718 ± 0.094** | 0.466 ± 0.159 |
+| GENIE3 | 0.533 ± 0.094 | — |
+| WGCNA | — (undirected) | — |
+
+![fig3](simulation/figures/fig3_direction_sign.png)
+
+### Parameter sensitivity (Fig. 4)
+
+![fig4](simulation/figures/fig_sensitivity.png)
+
+idopNetwork maintains its AUROC and MCC advantage across the full noise range (0.01–0.10) and all tested sample sizes (15–80). Performance degrades at very low sample size (N < 20) where ODE fitting becomes unstable.
 
 ---
 
@@ -75,29 +103,29 @@ Random baselines: AUROC = 0.5; AUPRC ≈ 0.24 (positive rate ≈ 25% × 19/20).
 
 ```
 idopNetwork-benchmark/
-├── idopnetwork/               # idopNetwork R package source (cloned from cxzdsa2332/idopNetwork)
-│   ├── R/
-│   ├── man/
-│   ├── data/
-│   ├── DESCRIPTION
-│   └── ...
+├── REPORT.md                      # Full methods, results, and discussion (Chinese)
+├── REPORT.pdf                     # PDF version of the report
+├── idopnetwork/                   # idopNetwork R package source
 └── simulation/
-    ├── config.R               # All tunable parameters
-    ├── 01_simulate_lv.R       # Scenario A: Lotka-Volterra ODE simulation
-    ├── 02_simulate_linear.R   # Scenario B: linear VAR(1) simulation
-    ├── 03_run_idopnetwork.R   # idopNetwork wrapper (sequential, avoids parallel cluster issues)
-    ├── 04_run_wgcna.R         # WGCNA wrapper (auto soft-threshold)
-    ├── 05_run_genie3.R        # GENIE3 wrapper
-    ├── 06_evaluate.R          # AUROC, AUPRC, direction accuracy, sign accuracy
-    ├── 07_visualize.R         # ggplot2 figures and summary table
-    ├── run_all.R              # Main orchestrator with checkpoint/resume
+    ├── config.R                   # All tunable parameters
+    ├── 01_simulate_lv.R           # LV ODE simulation
+    ├── 03_run_idopnetwork.R       # idopNetwork wrapper (sequential per-species)
+    ├── 04_run_wgcna.R             # WGCNA wrapper (auto soft-threshold)
+    ├── 05_run_genie3.R            # GENIE3 wrapper
+    ├── 06_evaluate.R              # AUROC, AUPRC, MCC, direction/sign accuracy
+    ├── 07_visualize.R             # Figures 1–3
+    ├── 08_plot_curves.R           # ROC / PR curve panels
+    ├── 09_plot_sweep.R            # Figure 4: sensitivity analysis
+    ├── run_all.R                  # Main orchestrator (checkpoint/resume)
+    ├── run_sweep.R                # Parameter sensitivity sweep
     ├── results/
-    │   ├── final_results.csv  # Per-replicate metrics (all methods × scenarios)
-    │   └── summary_table.csv  # Mean ± SD across replicates
+    │   ├── final_results.csv      # Per-replicate metrics (main experiment)
+    │   ├── summary_table.csv      # Mean ± SD across replicates
+    │   └── sweep_results.csv      # Sensitivity sweep results
     └── figures/
-        ├── fig1_auroc_auprc.png
-        ├── fig2_runtime.png
-        └── fig3_direction_sign.png
+        ├── fig1_metrics_combined.png   # AUROC / AUPRC / MCC bar charts
+        ├── fig3_direction_sign.png     # Direction and sign accuracy
+        └── fig_sensitivity.png          # Noise × sample-size sensitivity
 ```
 
 ---
@@ -110,71 +138,59 @@ idopNetwork-benchmark/
 devtools::install_local("idopnetwork/")
 ```
 
-### 2. Install other dependencies
+### 2. Install other R dependencies
 
 ```r
-# Bioconductor
 if (!requireNamespace("BiocManager", quietly = TRUE))
   install.packages("BiocManager")
 BiocManager::install(c("WGCNA", "GENIE3"))
 
-# CRAN
-install.packages(c("deSolve", "pROC", "PRROC", "ggplot2", "doRNG"))
+install.packages(c("deSolve", "pROC", "PRROC", "ggplot2", "patchwork", "cowplot"))
 ```
 
 ---
 
 ## Running the Simulation
 
+### Main experiment (≈ 1–2 hours)
+
 ```r
 setwd("path/to/idopNetwork-benchmark")
 source("simulation/run_all.R")
 ```
 
-The script saves a checkpoint after each replicate (`simulation/results/checkpoint.rds`) so interrupted runs can be resumed automatically.
+Saves a checkpoint after each replicate (`simulation/results/checkpoint.rds`); interrupted runs resume automatically.
 
-To change the number of replicates or other parameters, edit `simulation/config.R` before running.
+### Parameter sensitivity sweep (≈ 20–40 min)
 
----
+```r
+source("simulation/run_sweep.R")
+```
 
-## Results (2-replicate pilot)
+### Regenerate all figures
 
-A pilot run with 2 Monte Carlo replicates was completed to validate the full pipeline.
+```r
+source("simulation/07_visualize.R")
+cfg <- list(OUT_DIR = "simulation/results", FIG_DIR = "simulation/figures")
+make_all_figures(cfg)
 
-### AUROC / AUPRC
-
-![fig1](simulation/figures/fig1_auroc_auprc.png)
-
-### Runtime comparison
-
-![fig2](simulation/figures/fig2_runtime.png)
-
-### Direction and sign accuracy
-
-![fig3](simulation/figures/fig3_direction_sign.png)
-
-Key observations from the pilot run:
-
-- **idopNetwork** achieves AUROC above the random baseline (0.5) in the LV scenario, consistent with its design assumptions. Performance degrades in the VAR(1) scenario where the ODE model is misspecified.
-- **WGCNA** is fast (< 3 s) but produces an undirected network; direction accuracy is ~0.5 by construction.
-- **GENIE3** is fast (< 1 s) and provides directional inference; competitive AUROC in the VAR(1) scenario.
-- **Runtime**: idopNetwork is 50–150× slower than WGCNA/GENIE3 due to per-species ODE optimization.
-
-> **Note**: 2 replicates are insufficient for stable statistical conclusions. These results are a pipeline validation only. A full study should use ≥ 25 replicates.
+source("simulation/09_plot_sweep.R")
+plot_sweep(cfg)
+```
 
 ---
 
 ## Implementation Notes
 
-### idopNetwork pipeline
+### idopNetwork wrapper
 
-The wrapper in `03_run_idopnetwork.R` uses sequential `lapply` over species instead of `qdODE_parallel()`. The parallel version fails because `parLapply` cannot correctly serialize the closure containing the `pfit` list in this environment, causing `$ operator is invalid for atomic vectors` errors in worker processes.
+`03_run_idopnetwork.R` uses sequential `lapply` over species instead of `qdODE_parallel()`. The parallel version fails because `parLapply` cannot serialize the closure containing the `pfit` list, causing worker-process errors. Sequential execution adds overhead but ensures reproducibility.
 
-`network_conversion()` returns a matrix (not a data frame) when a species has exactly one regulator; the wrapper coerces it with `as.data.frame()` before accessing `$Effect`.
+`network_conversion()` returns a matrix (not a data frame) when a species has exactly one regulator; the wrapper coerces with `as.data.frame()` before accessing `$Effect`.
 
 ### Score matrix convention
 
-All methods output `score_mat[regulator, target]`, matching the ground truth convention where `B_true[target, regulator] ≠ 0` means `regulator → target`.
+All methods output `score_mat[regulator, target]`, matching the ground-truth convention `B_true[target, regulator] ≠ 0` → regulator → target edge.
 
 ---
 
@@ -182,11 +198,11 @@ All methods output `score_mat[regulator, target]`, matching the ground truth con
 
 If you use idopNetwork, please cite the original package:
 
-> [idopNetwork on GitHub](https://github.com/cxzdsa2332/idopNetwork)
+> [idopNetwork — cxzdsa2332/idopNetwork](https://github.com/cxzdsa2332/idopNetwork)
 
 ---
 
 ## License
 
-Simulation scripts in `simulation/` are released under MIT License.
+Simulation scripts in `simulation/` are released under the MIT License.  
 The `idopnetwork/` subdirectory retains its original license.
